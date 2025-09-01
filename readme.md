@@ -163,24 +163,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 - [Gobuster](https://github.com/OJ/gobuster) for the core scanning functionality.
 - [SecLists](https://github.com/danielmiessler/SecLists) for providing comprehensive wordlists.
-- Built with [Electron](https://www.electronjs.org/docs/latest) for GUI.
-
----
-
-### Improvements Made
-
-1. **Structured Layout**: Organized into clear sections (Features, Requirements, Installation, Usage, etc.) for better readability.
-2. **Detailed Instructions**: Added step-by-step installation and usage guides, including platform-specific commands.
-3. **Usage Examples**: Provided concrete examples for common modes (`dir` and `dns`) with corresponding `gobuster` commands.
-4. **Troubleshooting**: Included common issues and solutions to help users resolve problems.
-5. **Contributing Section**: Added guidelines for contributing to encourage community involvement.
-6. **Cross-Platform Notes**: Clarified Windows and macOS support, including how to handle SecLists and `gobuster` installation.
-7. **Favorites Integration**: Mentioned the "Add Favorite" button (assuming the updated script includes it).
-8. **Professional Tone**: Balanced technical accuracy with accessibility for users of varying experience levels.
-
-### Notes
-- The README assumes the script includes the `Add Favorite` button added in the improved code (see `_add_to_favorites` and the button in `_build_ui`).
-- If you want to customize the repository URL, license, or add specific acknowledgments, let me know, and I can update the README accordingly.
-- If you plan to add features (e.g., output filtering, progress bar), I can suggest corresponding README updates.
-
-Let me know if you need further refinements or additional sections!
+- Built with [Electron](https://www.electronjs.org/docs/latest)
