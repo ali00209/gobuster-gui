@@ -1,0 +1,1179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gobuster GUI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7/babel.min.js"></script>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    />
+  </head>
+  <body class="font-sans">
+    <div id="root" class="h-screen flex flex-col"></div>
+    <script type="text/babel">
+      const { useState, useEffect, useRef } = React;
+      const { ipcRenderer } = require("electron");
+
+      const SUPPORTED_MODES = ["dir", "dns", "fuzz", "vhost", "s3", "gcs", "tftp"];
+      const DEFAULT_SECLISTS_PATH = "/usr/share/seclists/";
+      const CONFIG_FILE = require("path").join(
+        require("os").homedir(),
+        ".gobuster_gui_config.json",
+      );
+      const PRESET_FILE = require("path").join(
+        require("os").homedir(),
+        ".gobuster_gui_presets.json",
+      );
+      const FAVORITES_FILE = require("path").join(
+        require("os").homedir(),
+        ".gobuster_gui_favorites.json",
+      );
+
+      function App() {
+        const [config, setConfig] = useState({
+          mode: "dir",
+          threads: 10,
+          delay: "",
+          output: "",
+          quiet: false,
+          no_progress: false,
+          no_error: false,
+          verbose: false,
+          no_color: false,
+          pattern_file: "",
+          wordlist_offset: 0,
+          user_agent: "",
+          headers: [],
+          insecure_tls: false,
+          follow_redirects: false,
+          url: "",
+          wordlist: "",
+          extensions: "",
+          status_codes: "",
+          blacklist: "",
+          no_status: false,
+          domain: "",
+          resolver: "",
+          show_ips: false,
+          fuzz_url: "",
+          fuzz_wordlist: "",
+          method: "GET",
+          body: "",
+          bucket_wordlist: "",
+          tftp_server: "",
+        });
+        const [appConfig, setAppConfig] = useState({
+          theme: "darkly",
+          seclists_path: DEFAULT_SECLISTS_PATH,
+          default_threads: 10,
+          default_output_dir: require("os").homedir(),
+          font_size: "medium",
+          auto_save_output: false,
+          clear_output_on_start: true,
+        });
+        const [wordlists, setWordlists] = useState([]);
+        const [favorites, setFavorites] = useState([]);
+        const [output, setOutput] = useState("");
+        const [command, setCommand] = useState("");
+        const [isRunning, setIsRunning] = useState(false);
+        const [activeTab, setActiveTab] = useState("Common");
+        const [showSettings, setShowSettings] = useState(false);
+        const [splitPosition, setSplitPosition] = useState(50);
+        const [isDragging, setIsDragging] = useState(false);
+        const splitRef = useRef();
+
+        useEffect(() => {
+          loadConfig();
+          loadWordlists();
+          validateGobuster();
+          refreshCommand();
+        }, []);
+
+        useEffect(() => {
+          refreshCommand();
+        }, [config]);
+
+        // Handle split pane dragging
+        useEffect(() => {
+          const handleMouseMove = (e) => {
+            if (isDragging && splitRef.current) {
+              const rect = splitRef.current.getBoundingClientRect();
+              const newPosition = ((e.clientX - rect.left) / rect.width) * 100;
+              setSplitPosition(Math.max(25, Math.min(75, newPosition)));
+            }
+          };
+
+          const handleMouseUp = () => {
+            setIsDragging(false);
+          };
+
+          if (isDragging) {
+            document.addEventListener("mousemove", handleMouseMove);
+            document.addEventListener("mouseup", handleMouseUp);
+            return () => {
+              document.removeEventListener("mousemove", handleMouseMove);
+              document.removeEventListener("mouseup", handleMouseUp);
+            };
+          }
+        }, [isDragging]);
+
+        const loadConfig = async () => {
+          try {
+            const configData = await ipcRenderer.invoke("read-config", CONFIG_FILE);
+            setAppConfig(configData);
+            setConfig((prev) => ({ ...prev, threads: configData.default_threads || 10 }));
+          } catch (e) {
+            console.error("Failed to load config:", e);
+          }
+        };
+
+        const saveAppConfig = async (newAppConfig) => {
+          try {
+            await ipcRenderer.invoke("write-config", CONFIG_FILE, newAppConfig);
+            setAppConfig(newAppConfig);
+            setConfig((prev) => ({ ...prev, threads: newAppConfig.default_threads }));
+            loadWordlists();
+            alert("Settings saved");
+          } catch (e) {
+            alert("Failed to save config: " + e.message);
+          }
+        };
+
+        const loadWordlists = async () => {
+          try {
+            const wordlistData = await ipcRenderer.invoke(
+              "load-wordlists",
+              appConfig.seclists_path,
+            );
+            const favoriteData = await ipcRenderer.invoke("load-favorites", FAVORITES_FILE);
+            setFavorites(favoriteData);
+            setWordlists([...favoriteData, "---", ...wordlistData]);
+          } catch (e) {
+            console.error("Failed to load wordlists:", e);
+          }
+        };
+
+        const validateGobuster = async () => {
+          try {
+            const result = await ipcRenderer.invoke("validate-gobuster");
+            setOutput(result + "\n");
+          } catch (e) {
+            setOutput("[Warning] Gobuster not found in PATH. Install it to run scans.\n");
+          }
+        };
+
+        const refreshCommand = () => {
+          const cmd = buildCommand(config);
+          setCommand(cmd.join(" "));
+        };
+
+        const buildCommand = (cfg) => {
+          let cmd = ["gobuster", cfg.mode];
+          if (cfg.threads && cfg.threads !== 10) cmd.push("-t", cfg.threads.toString());
+          if (cfg.delay) cmd.push("--delay", cfg.delay);
+          if (cfg.output) cmd.push("-o", cfg.output);
+          if (cfg.quiet) cmd.push("-q");
+          if (cfg.no_progress) cmd.push("-z");
+          if (cfg.no_error) cmd.push("--no-error");
+          if (cfg.verbose) cmd.push("-v");
+          if (cfg.no_color) cmd.push("--no-color");
+          if (cfg.pattern_file) cmd.push("-p", cfg.pattern_file);
+          if (cfg.wordlist_offset) cmd.push("--wordlist-offset", cfg.wordlist_offset.toString());
+          if (cfg.user_agent) cmd.push("-a", cfg.user_agent);
+          cfg.headers.forEach((h) => h.trim() && cmd.push("-H", h.trim()));
+          if (cfg.insecure_tls) cmd.push("-k");
+          if (cfg.follow_redirects) cmd.push("-r");
+          if (cfg.mode === "dir") {
+            if (cfg.url) cmd.push("-u", cfg.url);
+            if (cfg.wordlist) cmd.push("-w", cfg.wordlist);
+            if (cfg.extensions) cmd.push("-x", cfg.extensions);
+            if (cfg.status_codes) cmd.push("-s", cfg.status_codes);
+            if (cfg.blacklist) cmd.push("-b", cfg.blacklist);
+            if (cfg.no_status) cmd.push("-n");
+          } else if (cfg.mode === "dns") {
+            if (cfg.domain) cmd.push("-d", cfg.domain);
+            if (cfg.wordlist) cmd.push("-w", cfg.wordlist);
+            if (cfg.resolver) cmd.push("-r", cfg.resolver);
+            if (cfg.show_ips) cmd.push("-i");
+          } else if (cfg.mode === "fuzz") {
+            if (cfg.fuzz_url) cmd.push("-u", cfg.fuzz_url);
+            if (cfg.fuzz_wordlist) cmd.push("-w", cfg.fuzz_wordlist);
+            if (cfg.method && cfg.method.toUpperCase() !== "GET")
+              cmd.push("-X", cfg.method.toUpperCase());
+            if (cfg.body) cmd.push("-d", cfg.body);
+          } else if (cfg.mode === "vhost") {
+            if (cfg.url) cmd.push("-u", cfg.url);
+            if (cfg.wordlist) cmd.push("-w", cfg.wordlist);
+          } else if (["s3", "gcs"].includes(cfg.mode)) {
+            if (cfg.bucket_wordlist) cmd.push("-w", cfg.bucket_wordlist);
+          } else if (cfg.mode === "tftp") {
+            if (cfg.tftp_server) cmd.push("-u", cfg.tftp_server);
+            if (cfg.wordlist) cmd.push("-w", cfg.wordlist);
+          }
+          return cmd;
+        };
+
+        const startRun = async () => {
+          if (isRunning) {
+            alert("A run is already in progress.");
+            return;
+          }
+          if (!(await ipcRenderer.invoke("check-gobuster"))) {
+            alert("Gobuster not found in PATH. Install it first.");
+            return;
+          }
+          if (config.mode === "dir" && (!config.url || !config.wordlist)) {
+            alert("dir mode requires URL (-u) and wordlist (-w)");
+            return;
+          }
+          if (config.mode === "dns" && (!config.domain || !config.wordlist)) {
+            alert("dns mode requires domain (-d) and wordlist (-w)");
+            return;
+          }
+          if (config.mode === "fuzz" && !config.fuzz_url.includes("FUZZ")) {
+            alert("fuzz mode URL must contain FUZZ");
+            return;
+          }
+          if (config.mode === "vhost" && (!config.url || !config.wordlist)) {
+            alert("vhost mode requires URL (-u) and wordlist (-w)");
+            return;
+          }
+          let currentConfig = { ...config };
+          if (appConfig.auto_save_output && !currentConfig.output) {
+            const timestamp = new Date().toISOString().replace(/[:.-]/g, "");
+            const outputDir = appConfig.default_output_dir;
+            const outputPath = require("path").join(
+              outputDir,
+              `gobuster_${currentConfig.mode}_${timestamp}.txt`,
+            );
+            currentConfig.output = outputPath;
+            setConfig(currentConfig);
+          }
+          if (appConfig.clear_output_on_start) {
+            setOutput("");
+          }
+          const cmd = buildCommand(currentConfig);
+          setOutput(`$ ${cmd.join(" ")}\n\n`);
+          setIsRunning(true);
+          ipcRenderer.send("start-run", cmd);
+        };
+
+        const stopRun = async () => {
+          if (!isRunning) return;
+          if (!confirm("Are you sure you want to stop the scan?")) return;
+          await ipcRenderer.invoke("stop-run");
+          setIsRunning(false);
+        };
+
+        useEffect(() => {
+          ipcRenderer.on("run-output", (event, data) => {
+            setOutput((prev) => prev + data);
+          });
+          ipcRenderer.on("run-complete", (event, code) => {
+            setOutput((prev) => prev + `\n[Process exited with code ${code}]\n`);
+            setIsRunning(false);
+          });
+          return () => {
+            ipcRenderer.removeAllListeners("run-output");
+            ipcRenderer.removeAllListeners("run-complete");
+          };
+        }, []);
+
+        const copyCommand = () => {
+          ipcRenderer.invoke("copy-to-clipboard", command);
+          alert("Command copied to clipboard");
+        };
+
+        const savePreset = async () => {
+          const name = prompt("Preset name:");
+          if (!name) return;
+          try {
+            const presets = await ipcRenderer.invoke("read-presets", PRESET_FILE);
+            presets[name] = config;
+            await ipcRenderer.invoke("write-presets", PRESET_FILE, presets);
+            alert(`Preset '${name}' saved`);
+          } catch (e) {
+            alert("Failed to save preset: " + e.message);
+          }
+        };
+
+        const loadPreset = async () => {
+          try {
+            const presets = await ipcRenderer.invoke("read-presets", PRESET_FILE);
+            const names = Object.keys(presets).sort();
+            if (!names.length) {
+              alert("No presets found yet.");
+              return;
+            }
+            const name = prompt("Choose preset:", names[0]);
+            if (!name || !presets[name]) return;
+            setConfig(presets[name]);
+            alert(`Loaded preset '${name}'`);
+          } catch (e) {
+            alert("Failed to load preset: " + e.message);
+          }
+        };
+
+        const addToFavorites = async () => {
+          let wordlist;
+          switch (config.mode) {
+            case "dir":
+              wordlist = config.wordlist;
+              break;
+            case "dns":
+              wordlist = config.wordlist;
+              break;
+            case "fuzz":
+              wordlist = config.fuzz_wordlist;
+              break;
+            case "vhost":
+              wordlist = config.wordlist;
+              break;
+            case "s3":
+            case "gcs":
+              wordlist = config.bucket_wordlist;
+              break;
+            case "tftp":
+              wordlist = config.wordlist;
+              break;
+            default:
+              wordlist = "";
+          }
+          if (wordlist && (await ipcRenderer.invoke("file-exists", wordlist))) {
+            try {
+              const favorites = await ipcRenderer.invoke("load-favorites", FAVORITES_FILE);
+              if (!favorites.includes(wordlist)) {
+                favorites.push(wordlist);
+                await ipcRenderer.invoke("write-favorites", FAVORITES_FILE, favorites);
+                setFavorites(favorites);
+                setWordlists([
+                  ...favorites,
+                  "---",
+                  ...wordlists.slice(wordlists.indexOf("---") + 1),
+                ]);
+                alert(`Added ${wordlist} to favorites`);
+              }
+            } catch (e) {
+              alert("Failed to save favorite: " + e.message);
+            }
+          } else {
+            alert("No valid wordlist selected or file does not exist");
+          }
+        };
+
+        const handleTabChange = (tab) => {
+          setActiveTab(tab);
+          const lowerTab = tab.toLowerCase();
+          if (SUPPORTED_MODES.includes(lowerTab)) {
+            setConfig((prev) => ({ ...prev, mode: lowerTab }));
+          } else if (tab === "s3/gcs" && ["s3", "gcs"].includes(config.mode)) {
+            // Keep current if already s3 or gcs
+          } else if (tab === "s3/gcs") {
+            setConfig((prev) => ({ ...prev, mode: "s3" })); // Default to s3
+          }
+        };
+
+        const openSettings = () => {
+          setShowSettings(true);
+        };
+
+        const browseFile = async (filters = [{ name: "Text Files", extensions: ["txt"] }]) => {
+          try {
+            const path = await ipcRenderer.invoke("open-file-dialog", {
+              properties: ["openFile"],
+              filters,
+            });
+            return path;
+          } catch (e) {
+            console.error("Failed to open file dialog:", e);
+            return null;
+          }
+        };
+
+        const browseDirectory = async () => {
+          try {
+            const path = await ipcRenderer.invoke("open-directory-dialog");
+            return path;
+          } catch (e) {
+            console.error("Failed to open directory dialog:", e);
+            return null;
+          }
+        };
+
+        const browseSaveFile = async (
+          defaultPath = "",
+          filters = [{ name: "Text Files", extensions: ["txt"] }],
+        ) => {
+          try {
+            const path = await ipcRenderer.invoke("save-file-dialog", { defaultPath, filters });
+            return path;
+          } catch (e) {
+            console.error("Failed to open save dialog:", e);
+            return null;
+          }
+        };
+
+        const fontSizes = { small: "text-sm", medium: "text-base", large: "text-lg" };
+        const themeClasses = {
+          darkly: {
+            bg: "bg-gray-800",
+            bgSecondary: "bg-gray-900",
+            text: "text-gray-200",
+            border: "border-gray-600",
+            btnBg: "bg-blue-600 hover:bg-blue-700",
+            btnDisabled: "bg-gray-500",
+            btnStop: "bg-red-600 hover:bg-red-700",
+            inputBg: "bg-gray-700",
+            inputText: "text-gray-200",
+            tabActive: "bg-gray-700 border-blue-500",
+            tabInactive: "bg-gray-800 hover:bg-gray-700",
+          },
+          flatly: {
+            bg: "bg-white",
+            bgSecondary: "bg-gray-50",
+            text: "text-gray-800",
+            border: "border-gray-300",
+            btnBg: "bg-blue-500 hover:bg-blue-600",
+            btnDisabled: "bg-gray-300",
+            btnStop: "bg-red-500 hover:bg-red-600",
+            inputBg: "bg-gray-100",
+            inputText: "text-gray-800",
+            tabActive: "bg-blue-100 border-blue-500",
+            tabInactive: "bg-white hover:bg-gray-50",
+          },
+        };
+
+        const currentTheme = themeClasses[appConfig.theme] || themeClasses.darkly;
+
+        const toolbarBtn =
+          "p-2 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition disabled:opacity-50 disabled:cursor-not-allowed";
+
+        return (
+          <div
+            className={`h-full flex flex-col ${currentTheme.bgSecondary} ${currentTheme.text} ${fontSizes[appConfig.font_size]}`}
+          >
+            {/* Top Toolbar */}
+            <div
+              className={`${currentTheme.bg} ${currentTheme.border} border-b p-2 flex items-center gap-2 flex-wrap`}
+            >
+              {/* Run controls */}
+              <div className="flex items-center gap-2 border-l pl-2">
+                <button
+                  onClick={startRun}
+                  disabled={isRunning}
+                  aria-label="Start"
+                  className={toolbarBtn}
+                  title="Start"
+                >
+                  <i className="fas fa-play"></i>
+                </button>
+                <button
+                  onClick={stopRun}
+                  disabled={!isRunning}
+                  aria-label="Stop"
+                  className={toolbarBtn}
+                  title="Stop"
+                >
+                  <i className="fas fa-stop"></i>
+                </button>
+              </div>
+
+              {/* Output actions */}
+              <div className="flex items-center gap-2 border-l pl-2">
+                <button
+                  onClick={() => setOutput("")}
+                  aria-label="Clear output"
+                  className={toolbarBtn}
+                  title="Clear output"
+                >
+                  <i className="fas fa-broom"></i>
+                </button>
+                <button onClick={copyCommand} aria-label="Copy" className={toolbarBtn} title="Copy">
+                  <i className="fas fa-copy"></i>
+                </button>
+              </div>
+
+              {/* Presets + favorites */}
+              <div className="flex items-center gap-2 border-l pl-2">
+                <button
+                  onClick={savePreset}
+                  aria-label="Save preset"
+                  className={toolbarBtn}
+                  title="Save preset"
+                >
+                  <i className="fas fa-save"></i>
+                </button>
+                <button
+                  onClick={loadPreset}
+                  aria-label="Load preset"
+                  className={toolbarBtn}
+                  title="Load preset"
+                >
+                  <i className="fas fa-folder-open"></i>
+                </button>
+                <button
+                  onClick={addToFavorites}
+                  aria-label="Favorite"
+                  className={toolbarBtn}
+                  title="Favorite"
+                >
+                  <i className="fas fa-star"></i>
+                </button>
+              </div>
+
+              {/* Settings aligned right */}
+              <div className="ml-auto flex items-center border-l pl-2">
+                <button
+                  onClick={openSettings}
+                  aria-label="Settings"
+                  className={toolbarBtn}
+                  title="Settings"
+                >
+                  <i className="fas fa-cog"></i>
+                </button>
+              </div>
+            </div>
+
+            {/* Split Layout */}
+            <div className="flex-1 flex" ref={splitRef}>
+              {/* Left Panel - Configuration */}
+              <div
+                className={`${currentTheme.bg} ${currentTheme.border} border-r flex flex-col`}
+                style={{ width: `${splitPosition}%` }}
+              >
+                {/* Tab Navigation */}
+                <div
+                  className={`flex ${currentTheme.border} border-b overflow-x-auto scrollbar-thin`}
+                >
+                  {["Common", "dir", "dns", "fuzz", "vhost", "s3/gcs", "tftp"].map((tab) => (
+                    <button
+                      key={tab}
+                      onClick={() => handleTabChange(tab)}
+                      className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap flex-shrink-0 ${
+                        activeTab === tab
+                          ? `${currentTheme.tabActive} border-blue-500`
+                          : `${currentTheme.tabInactive} border-transparent`
+                      }`}
+                    >
+                      {tab}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tab Content */}
+                <div className="flex-1 p-4 overflow-auto">
+                  {activeTab === "Common" && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        <div className="space-y-3">
+                          <Input
+                            label="Threads"
+                            value={config.threads}
+                            onChange={(v) => setConfig({ ...config, threads: parseInt(v) || 10 })}
+                            type="number"
+                            theme={currentTheme}
+                          />
+                          <Input
+                            label="Delay (e.g., 1500ms)"
+                            value={config.delay}
+                            onChange={(v) => setConfig({ ...config, delay: v })}
+                            theme={currentTheme}
+                          />
+                          <FileInput
+                            label="Output file"
+                            value={config.output}
+                            onChange={(v) => setConfig({ ...config, output: v })}
+                            onBrowse={async () => {
+                              const path = await browseSaveFile(
+                                appConfig.default_output_dir + "/gobuster.txt",
+                              );
+                              if (path) setConfig({ ...config, output: path });
+                            }}
+                            theme={currentTheme}
+                          />
+                          <FileInput
+                            label="Pattern file (-p)"
+                            value={config.pattern_file}
+                            onChange={(v) => setConfig({ ...config, pattern_file: v })}
+                            onBrowse={async () => {
+                              const path = await browseFile();
+                              if (path) setConfig({ ...config, pattern_file: path });
+                            }}
+                            theme={currentTheme}
+                          />
+                          <Input
+                            label="Wordlist offset"
+                            value={config.wordlist_offset}
+                            onChange={(v) =>
+                              setConfig({ ...config, wordlist_offset: parseInt(v) || 0 })
+                            }
+                            type="number"
+                            theme={currentTheme}
+                          />
+                          <Input
+                            label="User-Agent"
+                            value={config.user_agent}
+                            onChange={(v) => setConfig({ ...config, user_agent: v })}
+                            theme={currentTheme}
+                          />
+                        </div>
+                        <div className="space-y-3">
+                          <div className="space-y-2">
+                            <h4 className="text-sm font-medium text-gray-400">Options</h4>
+                            <Checkbox
+                              label="Quiet (-q)"
+                              checked={config.quiet}
+                              onChange={(v) => setConfig({ ...config, quiet: v })}
+                              theme={currentTheme}
+                            />
+                            <Checkbox
+                              label="No progress (-z)"
+                              checked={config.no_progress}
+                              onChange={(v) => setConfig({ ...config, no_progress: v })}
+                              theme={currentTheme}
+                            />
+                            <Checkbox
+                              label="No errors (--no-error)"
+                              checked={config.no_error}
+                              onChange={(v) => setConfig({ ...config, no_error: v })}
+                              theme={currentTheme}
+                            />
+                            <Checkbox
+                              label="Verbose (-v)"
+                              checked={config.verbose}
+                              onChange={(v) => setConfig({ ...config, verbose: v })}
+                              theme={currentTheme}
+                            />
+                            <Checkbox
+                              label="No color (--no-color)"
+                              checked={config.no_color}
+                              onChange={(v) => setConfig({ ...config, no_color: v })}
+                              theme={currentTheme}
+                            />
+                            <Checkbox
+                              label="Insecure TLS (-k)"
+                              checked={config.insecure_tls}
+                              onChange={(v) => setConfig({ ...config, insecure_tls: v })}
+                              theme={currentTheme}
+                            />
+                            <Checkbox
+                              label="Follow redirects (-r)"
+                              checked={config.follow_redirects}
+                              onChange={(v) => setConfig({ ...config, follow_redirects: v })}
+                              theme={currentTheme}
+                            />
+                          </div>
+                          <div className="mt-4">
+                            <label className="block text-sm font-medium mb-1">Headers (-H)</label>
+                            <textarea
+                              value={config.headers.join("\n")}
+                              onChange={(e) =>
+                                setConfig({ ...config, headers: e.target.value.split("\n") })
+                              }
+                              className={`w-full h-20 ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-2 text-sm resize-none`}
+                              placeholder="One header per line"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === "dir" && (
+                    <div className="space-y-4">
+                      <Input
+                        label="URL (-u)"
+                        value={config.url}
+                        onChange={(v) => setConfig({ ...config, url: v })}
+                        placeholder="e.g., http://example.com"
+                        theme={currentTheme}
+                      />
+                      <SelectInput
+                        label="Wordlist (-w)"
+                        value={config.wordlist}
+                        onChange={(v) => setConfig({ ...config, wordlist: v })}
+                        options={wordlists}
+                        onBrowse={async () => {
+                          const path = await browseFile();
+                          if (path) setConfig({ ...config, wordlist: path });
+                        }}
+                        theme={currentTheme}
+                      />
+                      <Input
+                        label="Extensions (-x)"
+                        value={config.extensions}
+                        onChange={(v) => setConfig({ ...config, extensions: v })}
+                        placeholder="e.g., php,txt,zip"
+                        theme={currentTheme}
+                      />
+                      <Input
+                        label="Status include (-s)"
+                        value={config.status_codes}
+                        onChange={(v) => setConfig({ ...config, status_codes: v })}
+                        placeholder="e.g., 200,204,301"
+                        theme={currentTheme}
+                      />
+                      <Input
+                        label="Status blacklist (-b)"
+                        value={config.blacklist}
+                        onChange={(v) => setConfig({ ...config, blacklist: v })}
+                        placeholder="e.g., 404,500"
+                        theme={currentTheme}
+                      />
+                      <Checkbox
+                        label="No status (-n)"
+                        checked={config.no_status}
+                        onChange={(v) => setConfig({ ...config, no_status: v })}
+                        theme={currentTheme}
+                      />
+                    </div>
+                  )}
+
+                  {activeTab === "dns" && (
+                    <div className="space-y-4">
+                      <Input
+                        label="Domain (-d)"
+                        value={config.domain}
+                        onChange={(v) => setConfig({ ...config, domain: v })}
+                        placeholder="e.g., example.com"
+                        theme={currentTheme}
+                      />
+                      <SelectInput
+                        label="Wordlist (-w)"
+                        value={config.wordlist}
+                        onChange={(v) => setConfig({ ...config, wordlist: v })}
+                        options={wordlists}
+                        onBrowse={async () => {
+                          const path = await browseFile();
+                          if (path) setConfig({ ...config, wordlist: path });
+                        }}
+                        theme={currentTheme}
+                      />
+                      <Input
+                        label="Resolver (-r)"
+                        value={config.resolver}
+                        onChange={(v) => setConfig({ ...config, resolver: v })}
+                        placeholder="e.g., 1.1.1.1"
+                        theme={currentTheme}
+                      />
+                      <Checkbox
+                        label="Show IPs (-i)"
+                        checked={config.show_ips}
+                        onChange={(v) => setConfig({ ...config, show_ips: v })}
+                        theme={currentTheme}
+                      />
+                    </div>
+                  )}
+
+                  {activeTab === "fuzz" && (
+                    <div className="space-y-4">
+                      <Input
+                        label="URL with FUZZ (-u)"
+                        value={config.fuzz_url}
+                        onChange={(v) => setConfig({ ...config, fuzz_url: v })}
+                        placeholder="e.g., https://site.tld/index.php?q=FUZZ"
+                        theme={currentTheme}
+                      />
+                      <SelectInput
+                        label="Wordlist (-w)"
+                        value={config.fuzz_wordlist}
+                        onChange={(v) => setConfig({ ...config, fuzz_wordlist: v })}
+                        options={wordlists}
+                        onBrowse={async () => {
+                          const path = await browseFile();
+                          if (path) setConfig({ ...config, fuzz_wordlist: path });
+                        }}
+                        theme={currentTheme}
+                      />
+                      <Input
+                        label="Method (-X)"
+                        value={config.method}
+                        onChange={(v) => setConfig({ ...config, method: v })}
+                        theme={currentTheme}
+                      />
+                      <Input
+                        label="Body (-d)"
+                        value={config.body}
+                        onChange={(v) => setConfig({ ...config, body: v })}
+                        theme={currentTheme}
+                      />
+                    </div>
+                  )}
+
+                  {activeTab === "vhost" && (
+                    <div className="space-y-4">
+                      <Input
+                        label="Base URL (-u)"
+                        value={config.url}
+                        onChange={(v) => setConfig({ ...config, url: v })}
+                        placeholder="e.g., http://example.com"
+                        theme={currentTheme}
+                      />
+                      <SelectInput
+                        label="Wordlist (-w)"
+                        value={config.wordlist}
+                        onChange={(v) => setConfig({ ...config, wordlist: v })}
+                        options={wordlists}
+                        onBrowse={async () => {
+                          const path = await browseFile();
+                          if (path) setConfig({ ...config, wordlist: path });
+                        }}
+                        theme={currentTheme}
+                      />
+                    </div>
+                  )}
+
+                  {activeTab === "s3/gcs" && (
+                    <div className="space-y-4">
+                      <SelectInput
+                        label="Bucket wordlist (-w)"
+                        value={config.bucket_wordlist}
+                        onChange={(v) => setConfig({ ...config, bucket_wordlist: v })}
+                        options={wordlists}
+                        onBrowse={async () => {
+                          const path = await browseFile();
+                          if (path) setConfig({ ...config, bucket_wordlist: path });
+                        }}
+                        theme={currentTheme}
+                      />
+                    </div>
+                  )}
+
+                  {activeTab === "tftp" && (
+                    <div className="space-y-4">
+                      <Input
+                        label="TFTP server URL (-u)"
+                        value={config.tftp_server}
+                        onChange={(v) => setConfig({ ...config, tftp_server: v })}
+                        placeholder="e.g., tftp://ip:69"
+                        theme={currentTheme}
+                      />
+                      <SelectInput
+                        label="Wordlist (-w)"
+                        value={config.wordlist}
+                        onChange={(v) => setConfig({ ...config, wordlist: v })}
+                        options={wordlists}
+                        onBrowse={async () => {
+                          const path = await browseFile();
+                          if (path) setConfig({ ...config, wordlist: path });
+                        }}
+                        theme={currentTheme}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Draggable Handle */}
+              <div
+                className={`w-1 ${currentTheme.border} border-r cursor-col-resize hover:bg-blue-500 transition-colors`}
+                onMouseDown={() => setIsDragging(true)}
+              ></div>
+
+              {/* Right Panel - Command Preview and Output */}
+              <div
+                className={`flex flex-col ${currentTheme.bgSecondary}`}
+                style={{ width: `${100 - splitPosition}%` }}
+              >
+                {/* Command Preview */}
+                <div className={`${currentTheme.bg} ${currentTheme.border} border-b p-3`}>
+                  <label className="block text-sm font-medium mb-2">Command Preview</label>
+                  <div
+                    className={`${currentTheme.inputBg} border rounded p-2 font-mono text-xs overflow-x-auto whitespace-nowrap`}
+                  >
+                    {command}
+                  </div>
+                </div>
+
+                {/* Output Section */}
+                <div className="flex-1 flex flex-col p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium">Output</label>
+                    <div className="flex items-center gap-2">
+                      {isRunning && (
+                        <div className="flex items-center gap-2 text-green-500">
+                          <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                          <span className="text-xs">Running...</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  <textarea
+                    value={output}
+                    readOnly
+                    className={`flex-1 w-full ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-3 font-mono text-xs overflow-auto resize-none`}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Settings Modal */}
+            {showSettings && (
+              <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50 p-4">
+                <div
+                  className={`${currentTheme.bg} p-6 rounded-lg w-full max-w-4xl max-h-[90vh] overflow-auto`}
+                >
+                  <h2 className="text-xl font-bold mb-6">Settings</h2>
+
+                  {/* Settings Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    {/* Appearance Section */}
+                    <div className={`${currentTheme.inputBg} p-4 rounded-lg border`}>
+                      <h3 className="text-lg font-semibold mb-4 text-blue-400">Appearance</h3>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Theme:</label>
+                          <select
+                            value={appConfig.theme}
+                            onChange={(e) => setAppConfig({ ...appConfig, theme: e.target.value })}
+                            className={`w-full ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-2 text-sm`}
+                          >
+                            <option value="darkly">Dark Theme</option>
+                            <option value="flatly">Light Theme</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Font Size:</label>
+                          <select
+                            value={appConfig.font_size}
+                            onChange={(e) =>
+                              setAppConfig({ ...appConfig, font_size: e.target.value })
+                            }
+                            className={`w-full ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-2 text-sm`}
+                          >
+                            <option value="small">Small</option>
+                            <option value="medium">Medium</option>
+                            <option value="large">Large</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Defaults Section */}
+                    <div className={`${currentTheme.inputBg} p-4 rounded-lg border`}>
+                      <h3 className="text-lg font-semibold mb-4 text-green-400">Defaults</h3>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">Default Threads:</label>
+                          <input
+                            type="number"
+                            value={appConfig.default_threads}
+                            onChange={(e) =>
+                              setAppConfig({
+                                ...appConfig,
+                                default_threads: parseInt(e.target.value) || 10,
+                              })
+                            }
+                            className={`w-full ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-2 text-sm`}
+                            min="1"
+                            max="100"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Paths Section */}
+                    <div className={`${currentTheme.inputBg} p-4 rounded-lg border`}>
+                      <h3 className="text-lg font-semibold mb-4 text-purple-400">Paths</h3>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            SecLists Directory:
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={appConfig.seclists_path}
+                              onChange={(e) =>
+                                setAppConfig({ ...appConfig, seclists_path: e.target.value })
+                              }
+                              className={`flex-1 ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-2 text-sm`}
+                              placeholder="/usr/share/seclists/"
+                            />
+                            <button
+                              onClick={async () => {
+                                const path = await browseDirectory();
+                                if (path) setAppConfig({ ...appConfig, seclists_path: path });
+                              }}
+                              className={`px-3 py-2 rounded ${currentTheme.btnBg} text-white text-sm transition-colors flex-shrink-0`}
+                            >
+                              Browse
+                            </button>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1">
+                            Default Output Directory:
+                          </label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={appConfig.default_output_dir}
+                              onChange={(e) =>
+                                setAppConfig({ ...appConfig, default_output_dir: e.target.value })
+                              }
+                              className={`flex-1 ${currentTheme.inputBg} ${currentTheme.inputText} border rounded p-2 text-sm`}
+                              placeholder="~/Documents"
+                            />
+                            <button
+                              onClick={async () => {
+                                const path = await browseDirectory();
+                                if (path) setAppConfig({ ...appConfig, default_output_dir: path });
+                              }}
+                              className={`px-3 py-2 rounded ${currentTheme.btnBg} text-white text-sm transition-colors flex-shrink-0`}
+                            >
+                              Browse
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Behavior Section */}
+                    <div className={`${currentTheme.inputBg} p-4 rounded-lg border`}>
+                      <h3 className="text-lg font-semibold mb-4 text-orange-400">Behavior</h3>
+                      <div className="space-y-3">
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={appConfig.auto_save_output}
+                            onChange={(e) =>
+                              setAppConfig({ ...appConfig, auto_save_output: e.target.checked })
+                            }
+                            className="rounded"
+                          />
+                          <span className="text-sm">Auto-save output to file</span>
+                        </label>
+                        <label className="flex items-center space-x-2">
+                          <input
+                            type="checkbox"
+                            checked={appConfig.clear_output_on_start}
+                            onChange={(e) =>
+                              setAppConfig({
+                                ...appConfig,
+                                clear_output_on_start: e.target.checked,
+                              })
+                            }
+                            className="rounded"
+                          />
+                          <span className="text-sm">Clear output when starting new scan</span>
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex justify-end gap-3 pt-4 border-t">
+                    <button
+                      onClick={() => setShowSettings(false)}
+                      className={`px-6 py-2 rounded ${currentTheme.btnDisabled} text-white transition-colors`}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        saveAppConfig(appConfig);
+                        setShowSettings(false);
+                      }}
+                      className={`px-6 py-2 rounded ${currentTheme.btnBg} text-white transition-colors`}
+                    >
+                      Save Settings
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      }
+
+      function Input({ label, value, onChange, type = "text", placeholder, theme }) {
+        return (
+          <div className="mb-3">
+            <label className="block text-sm font-medium mb-1">{label}:</label>
+            <input
+              type={type}
+              value={value}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={placeholder}
+              className={`w-full ${theme.inputBg} ${theme.inputText} border rounded p-2 text-sm`}
+            />
+          </div>
+        );
+      }
+
+      function FileInput({ label, value, onChange, onBrowse, theme }) {
+        return (
+          <div className="mb-3">
+            <label className="block text-sm font-medium mb-1">{label}:</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                className={`flex-1 ${theme.inputBg} ${theme.inputText} border rounded p-2 text-sm`}
+              />
+              <button
+                onClick={onBrowse}
+                className={`px-3 py-2 rounded ${theme.btnBg} text-white text-sm transition-colors`}
+              >
+                ...
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      function SelectInput({ label, value, onChange, options, onBrowse, theme }) {
+        return (
+          <div className="mb-3">
+            <label className="block text-sm font-medium mb-1">{label}:</label>
+            <div className="flex gap-2">
+              <select
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                className={`flex-1 ${theme.inputBg} ${theme.inputText} border rounded p-2 text-sm`}
+              >
+                <option value="">Select...</option>
+                {options.map((opt) => (
+                  <option key={opt} value={opt}>
+                    {opt}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={onBrowse}
+                className={`px-3 py-2 rounded ${theme.btnBg} text-white text-sm transition-colors`}
+              >
+                ...
+              </button>
+            </div>
+          </div>
+        );
+      }
+
+      function Checkbox({ label, checked, onChange, theme }) {
+        return (
+          <div className="mb-2">
+            <label className="flex items-center">
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(e) => onChange(e.target.checked)}
+                className="mr-2"
+              />
+              <span className="text-sm">{label}</span>
+            </label>
+          </div>
+        );
+      }
+
+      ReactDOM.render(<App />, document.getElementById("root"));
+    </script>
+  </body>
+</html>

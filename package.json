@@ -1,0 +1,16 @@
+{
+  "name": "gobustergui",
+  "version": "1.0.0",
+  "description": "GUI for gobuster",
+  "main": "main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "electron . --disable-gpu"
+  },
+  "keywords": [],
+  "author": "ALI",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^37.4.0"
+  }
+}
